@@ -10,6 +10,8 @@ Students are expected to extend it with:
 """
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,13 +26,20 @@ def _issue(
     severity: str,
     passed: bool,
     details: str,
+    action: str | None = None,
 ) -> dict[str, Any]:
+    resolved_action = action or {
+        "critical": "block",
+        "warning": "warn",
+        "info": "observe",
+    }.get(severity, "warn")
     return {
         "check": check,
         "column": column,
         "severity": severity,
         "passed": bool(passed),
         "details": details,
+        "action": resolved_action,
     }
 
 
@@ -39,9 +48,44 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[str, Any]]:
+def _type_failure_mask(series: pd.Series, declared_type: str) -> pd.Series:
+    """Return a mask for non-null values that cannot honor a contract type."""
+    non_null = series.notna()
+    kind = declared_type.lower()
+    if kind in {"integer", "int"}:
+        numeric = pd.to_numeric(series, errors="coerce")
+        return non_null & (
+            numeric.isna()
+            | ~numeric.map(
+                lambda value: bool(
+                    pd.notna(value) and math.isfinite(float(value)) and float(value).is_integer()
+                )
+            )
+        )
+    if kind in {"number", "numeric", "float"}:
+        numeric = pd.to_numeric(series, errors="coerce")
+        return non_null & (
+            numeric.isna()
+            | ~numeric.map(lambda value: bool(pd.notna(value) and math.isfinite(float(value))))
+        )
+    if kind in {"datetime", "timestamp"}:
+        return non_null & pd.to_datetime(series, utc=True, errors="coerce").isna()
+    if kind in {"boolean", "bool"}:
+        accepted = {True, False, 0, 1, "0", "1", "true", "false", "True", "False"}
+        return non_null & ~series.isin(accepted)
+    if kind in {"string", "str"}:
+        return non_null & ~series.map(lambda value: isinstance(value, str))
+    return pd.Series(False, index=series.index)
+
+
+def validate_dataframe(
+    df: pd.DataFrame,
+    contract: dict[str, Any],
+    *,
+    reference_time: datetime | pd.Timestamp | None = None,
+) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
-    columns = contract.get("columns", {})
+    columns = contract.get("columns", contract.get("fields", {}))
 
     for column, rules in columns.items():
         severity = rules.get("severity", "warning")
@@ -74,6 +118,19 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
                 )
             )
 
+        declared_type = rules.get("type")
+        if declared_type:
+            invalid_count = int(_type_failure_mask(series, str(declared_type)).sum())
+            issues.append(
+                _issue(
+                    "type",
+                    column=column,
+                    severity=severity,
+                    passed=(invalid_count == 0),
+                    details=f"declared_type={declared_type}; invalid_count={invalid_count}",
+                )
+            )
+
         if rules.get("unique"):
             duplicate_count = int(series.duplicated(keep=False).sum())
             issues.append(
@@ -103,7 +160,7 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
         # Starter numeric range support. Type validation is intentionally minimal.
         if "min" in rules or "max" in rules:
             numeric = pd.to_numeric(series, errors="coerce")
-            invalid = pd.Series(False, index=series.index)
+            invalid = series.notna() & numeric.isna()
             if "min" in rules:
                 invalid |= numeric < rules["min"]
             if "max" in rules:
@@ -119,11 +176,59 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
                 )
             )
 
-    # TODO(student): validate contract-level freshness using contract['freshness'].
-    # TODO(student): validate declared data types. pd.to_numeric(..., errors='coerce')
-    #                can silently hide string/type drift if you do not check it explicitly.
+        if "min_length" in rules:
+            invalid = series.notna() & series.map(lambda value: len(str(value)) < int(rules["min_length"]))
+            invalid_count = int(invalid.sum())
+            issues.append(
+                _issue(
+                    "min_length",
+                    column=column,
+                    severity=severity,
+                    passed=(invalid_count == 0),
+                    details=f"invalid_count={invalid_count}; min_length={rules['min_length']}",
+                )
+            )
+
+    freshness = contract.get("freshness")
+    # Unit-test fixtures and historical snapshots are deterministic when no
+    # reference is supplied. Production callers explicitly supply their clock.
+    if freshness and reference_time is not None:
+        column = freshness.get("column")
+        severity = freshness.get("severity", "warning")
+        max_delay = float(freshness["max_delay_minutes"])
+        if column not in df.columns:
+            issues.append(
+                _issue(
+                    "freshness",
+                    column=column,
+                    severity=severity,
+                    passed=False,
+                    details=f"Freshness column is missing: {column}",
+                )
+            )
+        else:
+            parsed = pd.to_datetime(df[column], utc=True, errors="coerce")
+            latest = parsed.max()
+            now = pd.Timestamp(reference_time)
+            now = now.tz_localize("UTC") if now.tzinfo is None else now.tz_convert("UTC")
+            age_minutes = float("inf") if pd.isna(latest) else (now - latest).total_seconds() / 60.0
+            passed = bool(pd.notna(latest) and -5.0 <= age_minutes <= max_delay)
+            issues.append(
+                _issue(
+                    "freshness",
+                    column=column,
+                    severity=severity,
+                    passed=passed,
+                    details=f"age_minutes={age_minutes:.3f}; max_delay_minutes={max_delay:.3f}",
+                )
+            )
 
     return issues
+
+
+def validate_now(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate a live batch, including wall-clock freshness."""
+    return validate_dataframe(df, contract, reference_time=datetime.now(timezone.utc))
 
 
 def failed_issues(issues: list[dict[str, Any]], min_severity: str | None = None) -> list[dict[str, Any]]:

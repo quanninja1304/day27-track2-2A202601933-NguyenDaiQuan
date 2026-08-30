@@ -39,32 +39,35 @@ Across the pipeline: metrics -> anomaly -> lineage -> SLO -> incident response
 
 Yêu cầu: **Python 3.10–3.13**. Docker không bắt buộc.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+Repo dùng **uv** để khóa dependency và tự chọn Python tương thích:
 
-make reset
-make baseline
-pytest tests_public -q
+```bash
+uv sync --python 3.13
+uv run python scripts/reset_lab.py
+uv run python scripts/run_baseline.py
+uv run pytest -q
 ```
+
+Nếu máy có GNU Make, các lệnh tương đương là `make reset`, `make baseline`
+và `make tests`; Makefile cũng gọi qua `uv run`.
 
 Chạy dbt:
 
 ```bash
-make dbt
+uv run python scripts/sync_dbt_seeds.py
+uv run dbt build --project-dir dbt_project --profiles-dir dbt_project
 ```
 
 Chạy Great Expectations example:
 
 ```bash
-make gx
+uv run python gx/validate_orders.py
 ```
 
 Dashboard:
 
 ```bash
-make dashboard
+uv run streamlit run dashboard/app.py
 ```
 
 ## 3. Starter code đã có gì?
@@ -81,14 +84,18 @@ make dashboard
 - 3 public fault scenarios để tập điều tra.
 - 10 public tests để kiểm tra stable interface.
 
-**Quan trọng:** starter code chỉ là baseline. Code cố ý **chưa xử lý hoàn chỉnh** seasonality, robust statistics, type drift, freshness contract, column lineage, multi-window burn rate, full GX Actions, RAG embedding drift… Học viên phải nghiên cứu và nâng cấp.
+**Trạng thái submission:** các phần nâng cao đã được triển khai và kiểm chứng:
+type/freshness contract, severity actions, GX Checkpoint/quarantine, dbt unit
+test, MAD/seasonality, distribution drift, transitive column lineage,
+multi-window burn rate và RAG embedding drift. Evidence nằm tại
+`docs/SOLUTION.md` và `reports/`.
 
 ## 4. Public fault scenarios
 
 ```bash
-python scripts/inject_fault.py duplicate_pk
-python scripts/inject_fault.py volume_drop
-python scripts/inject_fault.py stale_kb
+uv run python scripts/inject_fault.py duplicate_pk
+uv run python scripts/inject_fault.py volume_drop
+uv run python scripts/inject_fault.py stale_kb
 ```
 
 Sau mỗi scenario:
@@ -107,17 +114,17 @@ make reset
 
 Xem chi tiết trong `docs/LAB_GUIDE.md`.
 
-Các TODO quan trọng:
+Các hạng mục đã hoàn thiện:
 
 - `src/contract_validator.py`: type checking, freshness, severity/action.
-- `gx/validate_orders.py`: expectation đơn lẻ → Suite/ValidationDefinition/Checkpoint/Actions.
-- `dbt_project/`: thêm singular data test + dbt unit test cho join/SCD.
-- `observability/anomaly.py`: robust baseline, seasonality, MAD/EWMA.
-- `observability/distribution.py`: distribution drift tốt hơn mean ratio.
+- `gx/validate_orders.py`: Suite/ValidationDefinition/Checkpoint/custom Action.
+- `dbt_project/`: singular data tests và native unit test cho join/SCD.
+- `observability/anomaly.py`: robust MAD baseline và seasonal context.
+- `observability/distribution.py`: KS distribution drift và mean guard.
 - `observability/slo.py`: multi-window burn-rate policy.
-- `observability/lineage.py`: column lineage / OpenLineage optional.
-- `observability/rag_metrics.py`: embedding drift / retrieval metrics optional.
-- `reports/incident_report.md`: incident report cuối lab.
+- `observability/lineage.py`: transitive dataset/column lineage.
+- `observability/rag_metrics.py`: text-length và embedding-norm drift.
+- `reports/incident_report.md`: incident report hoàn chỉnh.
 
 ## 6. Hidden evaluation
 

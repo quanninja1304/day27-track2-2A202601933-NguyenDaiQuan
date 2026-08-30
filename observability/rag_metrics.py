@@ -5,6 +5,7 @@ from typing import Any, Iterable
 import numpy as np
 
 from observability.anomaly import zscore_detector
+from observability.distribution import detect_distribution_shift
 
 
 def approximate_token_lengths(texts: Iterable[str]) -> list[int]:
@@ -29,9 +30,20 @@ def detect_text_length_shift(
 def detect_embedding_norm_shift(
     current_norms: Iterable[float], baseline_norms: Iterable[float]
 ) -> dict[str, Any]:
-    """TODO(student): implement embedding-space drift signal.
-
-    No embedding model is required for the starter lab. Hidden evaluation can
-    feed precomputed norms/similarities through this stable interface.
-    """
-    return {"is_anomaly": False, "score": 0.0, "method": "not_implemented"}
+    """Detect changes in precomputed embedding norms without loading a model."""
+    current = list(current_norms)
+    baseline = list(baseline_norms)
+    if not current or not baseline:
+        return {"is_anomaly": False, "score": 0.0, "method": "embedding_norm", "reason": "empty_input"}
+    distribution = detect_distribution_shift(current, baseline, ratio_threshold=1.5)
+    mean_signal = zscore_detector(float(np.mean(current)), baseline, threshold=3.0)
+    use_mean = mean_signal["is_anomaly"] and mean_signal["score"] >= distribution["score"]
+    chosen = mean_signal if use_mean else distribution
+    return {
+        "is_anomaly": bool(distribution["is_anomaly"] or mean_signal["is_anomaly"]),
+        "score": float(max(distribution["score"], mean_signal["score"])),
+        "method": "embedding_norm:zscore" if use_mean else "embedding_norm:ks",
+        "reason": chosen["reason"],
+        "current_mean": float(np.mean(current)),
+        "baseline_mean": float(np.mean(baseline)),
+    }

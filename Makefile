@@ -1,25 +1,26 @@
-PYTHON ?= python
+UV ?= uv
+RUN := $(UV) run
 
 .PHONY: reset baseline tests gx dbt dashboard generate
 
 reset:
-	$(PYTHON) scripts/reset_lab.py
+	$(RUN) python scripts/reset_lab.py
 
 baseline:
-	$(PYTHON) scripts/run_baseline.py
+	$(RUN) python scripts/run_baseline.py
 
 tests:
-	pytest tests_public -q
+	$(RUN) pytest -q
 
 gx:
-	$(PYTHON) gx/validate_orders.py
+	$(RUN) python gx/validate_orders.py
 
 dbt:
-	$(PYTHON) scripts/sync_dbt_seeds.py
-	dbt build --project-dir dbt_project --profiles-dir dbt_project
+	$(RUN) python scripts/sync_dbt_seeds.py
+	$(RUN) dbt build --project-dir dbt_project --profiles-dir dbt_project
 
 dashboard:
-	streamlit run dashboard/app.py
+	$(RUN) streamlit run dashboard/app.py
 
 generate:
-	$(PYTHON) scripts/generate_data.py --rows 600 --days 42 --seed 27
+	$(RUN) python scripts/generate_data.py --rows 600 --days 42 --seed 27

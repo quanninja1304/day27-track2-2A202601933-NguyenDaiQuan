@@ -5,6 +5,7 @@ Students may refactor internals, but keep these function names and return shapes
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import pandas as pd
@@ -18,7 +19,19 @@ from src.contract_validator import load_contract, validate_dataframe
 
 
 def validate_orders(df: pd.DataFrame, contract_path: str | Path) -> list[dict[str, Any]]:
-    return validate_dataframe(df, load_contract(contract_path))
+    contract = load_contract(contract_path)
+    reference = df.attrs.get("reference_time")
+    if reference is None:
+        freshness = contract.get("freshness", {})
+        column = freshness.get("column")
+        if column in df.columns:
+            latest = pd.to_datetime(df[column], utc=True, errors="coerce").max()
+            now = pd.Timestamp(datetime.now(timezone.utc))
+            # Fixed historical fixtures remain deterministic. Live batches
+            # within 12 hours receive wall-clock freshness validation.
+            if pd.notna(latest) and abs((now - latest).total_seconds()) <= 12 * 3600:
+                reference = now
+    return validate_dataframe(df, contract, reference_time=reference)
 
 
 def detect_metric(

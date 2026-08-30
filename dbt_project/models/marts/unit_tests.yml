@@ -1,9 +1,8 @@
-# Rename/copy this file to a .yml file after you complete the exercise.
-# Check current dbt unit-test syntax in the official docs if your installed dbt
-# version differs from the course image.
+version: 2
 
 unit_tests:
-  - name: completed_orders_sum_to_expected_revenue
+  - name: duplicate_active_customer_does_not_inflate_revenue
+    description: The latest active SCD row is selected before joining orders.
     model: fct_daily_revenue
     given:
       - input: ref('stg_orders')
@@ -12,7 +11,8 @@ unit_tests:
           - {order_id: 2, customer_id: C0001, amount_usd: 70.0, status: completed, order_date: '2026-08-01'}
       - input: ref('stg_customers')
         rows:
-          - {customer_id: C0001, is_active: true}
+          - {customer_id: C0001, is_active: true, valid_from: '2026-01-01'}
+          - {customer_id: C0001, is_active: true, valid_from: '2026-07-01'}
     expect:
       rows:
         - {order_date: '2026-08-01', completed_order_rows: 2, daily_revenue: 170.0}

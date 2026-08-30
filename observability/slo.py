@@ -35,17 +35,28 @@ def evaluate_multiwindow_burn(
     *,
     short_window_burn: float,
     long_window_burn: float,
-    policy: str = "starter",
+    policy: str = "google_sre",
 ) -> dict[str, Any]:
-    """TODO(student): implement a real multi-window burn-rate policy.
+    """Evaluate paired burn windows and reject short transient spikes.
 
-    Starter intentionally never pages. Hidden evaluation contains cases that
-    require distinguishing sustained fast burn from a transient spike.
+    The thresholds mirror the useful shape of the Google SRE policy: both a
+    fast and a sustained signal must agree before paging.
     """
+    if short_window_burn < 0 or long_window_burn < 0:
+        raise ValueError("burn rates must be non-negative")
+    if short_window_burn >= 14.4 and long_window_burn >= 6.0:
+        page, severity, reason = True, "critical", "sustained_fast_burn"
+    elif short_window_burn >= 6.0 and long_window_burn >= 3.0:
+        page, severity, reason = True, "warning", "sustained_elevated_burn"
+    elif short_window_burn >= 6.0:
+        page, severity, reason = False, "info", "transient_short_window_spike"
+    else:
+        page, severity, reason = False, "info", "within_burn_policy"
     return {
-        "page": False,
-        "severity": "info",
-        "reason": "starter_policy_not_implemented",
+        "page": page,
+        "severity": severity,
+        "reason": reason,
+        "policy": policy,
         "short_window_burn": short_window_burn,
         "long_window_burn": long_window_burn,
     }
